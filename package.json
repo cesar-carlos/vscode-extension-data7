@@ -1,0 +1,198 @@
+{
+  "name": "vscode-extension-data7",
+  "displayName": "Data7 Dev Studio integration",
+  "description": "Ferramentas para desenvolvimento, sincronização e execução de projetos Data7 (.7Proj) no VS Code.",
+  "version": "0.1.0",
+  "publisher": "matheusdevelope",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:d7basic",
+    "onLanguage:data7project",
+    "workspaceContains:**/*.7proj",
+    "workspaceContains:**/*.7Proj",
+    "onCommand:data7.openProject",
+    "onCommand:data7.newProject",
+    "onCommand:data7.openDevStudio",
+    "onCommand:data7.build",
+    "onCommand:data7.runProject",
+    "onCommand:data7.installModule",
+    "onCommand:data7.updateDependencies",
+    "onCommand:data7.importModuleToRepository",
+    "onCommand:data7.bulkImportToRepository",
+    "onCommand:data7.exploreRepository"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "d7basic",
+        "aliases": [
+          "Data7 Basic",
+          "d7basic"
+        ],
+        "extensions": [
+          ".bas",
+          ".d7b"
+        ],
+        "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "data7project",
+        "aliases": [
+          "Data7 Project",
+          "data7project"
+        ],
+        "extensions": [
+          ".7proj",
+          ".7Proj"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "id": "d7basic",
+        "language": "d7basic",
+        "scopeName": "source.d7basic",
+        "path": "./syntaxes/d7basic.tmLanguage.json"
+      },
+      {
+        "language": "data7project",
+        "scopeName": "text.xml.data7project",
+        "path": "./syntaxes/d7project.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "data7.openProject",
+        "title": "Data7: Abrir Projeto",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "data7.newProject",
+        "title": "Data7: Criar Novo Projeto"
+      },
+      {
+        "command": "data7.openDevStudio",
+        "title": "Data7: Abrir no Developer Studio"
+      },
+      {
+        "command": "data7.build",
+        "title": "Data7: Compilar/Rebuildar Projeto"
+      },
+      {
+        "command": "data7.runProject",
+        "title": "Data7: Executar Projeto (F5)"
+      },
+      {
+        "command": "data7.installModule",
+        "title": "Data7: Instalar Módulo Compartilhado"
+      },
+      {
+        "command": "data7.updateDependencies",
+        "title": "Data7: Atualizar Dependências do Projeto"
+      },
+      {
+        "command": "data7.importModuleToRepository",
+        "title": "Data7: Adicionar Módulo ao Repositório"
+      },
+      {
+        "command": "data7.bulkImportToRepository",
+        "title": "Data7: Importar Módulos em Massa para o Repositório"
+      },
+      {
+        "command": "data7.exploreRepository",
+        "title": "Data7: Explorar Repositório de Módulos"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "data7.openProject",
+          "when": "resourceExtname == .7proj",
+          "group": "navigation"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "data7.openProject",
+          "when": "resourceExtname == .7proj",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "data7.openProject",
+          "when": "resourceExtname == .7proj",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "data7.runProject",
+        "key": "f5",
+        "when": "editorLangId == d7basic"
+      }
+    ],
+    "configuration": {
+      "title": "Data7 Configuration",
+      "properties": {
+        "data7.executorPath": {
+          "type": "string",
+          "default": "C:\\Data7\\bin\\[Executor.exe ou D7MG.exe]",
+          "description": "Caminho absoluto para o executável do Executor do Data7 (ex: C:\\Data7\\bin\\Executor.exe)."
+        },
+        "data7.sharedModulesPath": {
+          "type": "string",
+          "default": "",
+          "description": "Caminho da pasta global contendo os módulos compartilhados (.7Proj ou .bas) que podem ser importados automaticamente."
+        },
+        "data7.userCode": {
+          "type": "integer",
+          "default": 1,
+          "description": "Código do Usuário (-U) para passar ao Executor."
+        },
+        "data7.companyCode": {
+          "type": "integer",
+          "default": 1,
+          "description": "Código da Empresa (-E) para passar ao Executor."
+        },
+        "data7.branchCode": {
+          "type": "integer",
+          "default": 1,
+          "description": "Código da Filial (-F) para passar ao Executor."
+        },
+        "data7.databaseConnectionId": {
+          "type": "string",
+          "default": "",
+          "description": "UUID de Conexão com o Banco de Dados (-C). Se vazio, a extensão tentará ler do projeto data7.json."
+        },
+        "data7.enableAutoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Habilitar sincronização automática bidirecional entre os arquivos da IDE e o arquivo .7Proj."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test out/test/**/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.3.0"
+  }
+}

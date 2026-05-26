@@ -1,0 +1,100 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Data7 Basic",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.apostrophe.d7basic",
+          "match": "('.*)$",
+          "captures": {
+            "1": {
+              "patterns": [
+                {
+                  "name": "keyword.control.directive.module.d7basic",
+                  "match": "@Module\\b"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.d7basic",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.d7basic",
+              "match": "\"\""
+            }
+          ]
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.d7basic",
+          "match": "(?i)\\b(Imports|Namespace|Class|Sub|Function|Property|Get|Set|Shared|Inherits|Overridable|Overrides|As|Public|Private|Dim|New|If|Then|Else|ElseIf|End|Return|Select|Case|Try|Catch|Throw|For|To|Next|While|Loop|Do|Exit|With|MyBase|Me)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.d7basic",
+          "match": "(?i)\\b(And|Or|Not|Xor)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.d7basic",
+          "match": "(?i)\\b(Integer|Long|String|Boolean|Variant|TDateTime|Exception|TObject|StringList|Collections\\.StringList|ObjectPrinter|Transport|TransportList|BaseList|BaseItem|SQL\\.Command|TJSONArray|TJSONObject|Certificado|CertificadoList|Logger|LogInfo)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.d7basic",
+          "match": "(?i)\\b(True|False|NULL|Nothing)\\b"
+        },
+        {
+          "name": "constant.numeric.d7basic",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "entity.name.function.d7basic",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)(?=\\()"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.d7basic"
+}

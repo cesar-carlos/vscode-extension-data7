@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Data7 Project XML",
+  "patterns": [
+    {
+      "include": "text.xml"
+    }
+  ],
+  "scopeName": "text.xml.data7project"
+}
