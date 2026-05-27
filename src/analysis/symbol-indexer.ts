@@ -149,7 +149,10 @@ export class SymbolParser {
     let pendingDescription = "";
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      const line = lines[lineIdx];
+      // `lineIdx < lines.length` makes `lines[lineIdx]` always defined; the
+      // `?? ""` keeps `noUncheckedIndexedAccess` happy without weakening
+      // anything at runtime.
+      const line = lines[lineIdx] ?? "";
       const trimmed = line.trim();
 
       // 1. Check comments
@@ -178,7 +181,7 @@ export class SymbolParser {
 
       // 2. Imports
       const importMatch = trimmed.match(IMPORTS_REGEX_ANCHORED);
-      if (importMatch) {
+      if (importMatch?.[1]) {
         fileSymbols.imports.push(importMatch[1]);
         pendingDescription = "";
         continue;
@@ -193,7 +196,7 @@ export class SymbolParser {
 
       // 4. Namespace start
       const nsMatch = /^Namespace\s+([a-zA-Z0-9_.]+)/i.exec(trimmed);
-      if (nsMatch) {
+      if (nsMatch?.[1]) {
         activeNamespace = nsMatch[1];
         const nsSymbol: SymbolInfo = {
           name: activeNamespace,
@@ -228,7 +231,7 @@ export class SymbolParser {
 
       // 6. Inherits (inside class)
       const inheritsMatch = /^Inherits\s+([a-zA-Z0-9_.]+)/i.exec(trimmed);
-      if (inheritsMatch && activeClass) {
+      if (inheritsMatch?.[1] && activeClass) {
         activeClass.inheritsFrom = inheritsMatch[1];
         pendingDescription = "";
         continue;
@@ -238,8 +241,8 @@ export class SymbolParser {
       const classMatch = /^(?:(Private|Public|Protected|Shared)\s+)*Class\s+([a-zA-Z0-9_]+)/i.exec(
         trimmed,
       );
-      if (classMatch) {
-        const modifiers = (classMatch[0] || "").toLowerCase();
+      if (classMatch?.[2]) {
+        const modifiers = classMatch[0].toLowerCase();
         const isPrivate = modifiers.includes("private");
         const isShared = modifiers.includes("shared");
         const name = classMatch[2];
@@ -280,8 +283,8 @@ export class SymbolParser {
       // 9. Structure start
       const structMatch =
         /^(?:(Private|Public|Protected|Shared)\s+)*Structure\s+([a-zA-Z0-9_]+)/i.exec(trimmed);
-      if (structMatch) {
-        const modifiers = (structMatch[0] || "").toLowerCase();
+      if (structMatch?.[2]) {
+        const modifiers = structMatch[0].toLowerCase();
         const isPrivate = modifiers.includes("private");
         const isShared = modifiers.includes("shared");
         const name = structMatch[2];
@@ -324,12 +327,12 @@ export class SymbolParser {
         /^(?:(Private|Public|Protected|Shared|ReadOnly|WriteOnly)\s+)*Property\s+([a-zA-Z0-9_]+)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
           trimmed,
         );
-      if (propMatch) {
-        const modifiers = (propMatch[0] || "").toLowerCase();
+      if (propMatch?.[2]) {
+        const modifiers = propMatch[0].toLowerCase();
         const isPrivate = modifiers.includes("private");
         const isShared = modifiers.includes("shared");
         const name = propMatch[2];
-        const type = propMatch[3] || "Variant";
+        const type = propMatch[3] ?? "Variant";
 
         const propSymbol: SymbolInfo = {
           name,
@@ -358,14 +361,15 @@ export class SymbolParser {
         /^(?:(Private|Public|Protected|Shared)\s+)*Delegate\s+(Sub|Function)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
           trimmed,
         );
-      if (delegateMatch) {
-        const modifiers = (delegateMatch[0] || "").toLowerCase();
+      if (delegateMatch?.[3]) {
+        const modifiers = delegateMatch[0].toLowerCase();
         const isPrivate = modifiers.includes("private");
         const isShared = modifiers.includes("shared");
         const name = delegateMatch[3];
-        const params = this.parseParameters(delegateMatch[4]);
+        const params = this.parseParameters(delegateMatch[4] ?? "");
         const type =
-          delegateMatch[5] || (delegateMatch[2].toLowerCase() === "sub" ? "Void" : "Variant");
+          delegateMatch[5] ??
+          ((delegateMatch[2] ?? "").toLowerCase() === "sub" ? "Void" : "Variant");
 
         const delegateSymbol: SymbolInfo = {
           name,
@@ -394,15 +398,15 @@ export class SymbolParser {
         /^(?:(Private|Public|Protected|Shared)\s+)*Declare\s+(Sub|Function)\s+([a-zA-Z0-9_]+)\s+Lib\s+"([^"]+)"(?:\s+Alias\s+"([^"]+)")?\s*\(([^)]*)\)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
           trimmed,
         );
-      if (declareMatch) {
-        const modifiers = declareMatch[1] ? declareMatch[1].toLowerCase() : "";
+      if (declareMatch?.[3]) {
+        const modifiers = declareMatch[1]?.toLowerCase() ?? "";
         const isPrivate = modifiers.includes("private") || modifiers === "";
         const isShared = true;
-        const kind = declareMatch[2].toLowerCase() === "sub" ? "declare_sub" : "declare_function";
+        const subOrFunc = (declareMatch[2] ?? "").toLowerCase();
+        const kind = subOrFunc === "sub" ? "declare_sub" : "declare_function";
         const name = declareMatch[3];
-        const params = this.parseParameters(declareMatch[6]);
-        const type =
-          declareMatch[7] || (declareMatch[2].toLowerCase() === "sub" ? "Void" : "Variant");
+        const params = this.parseParameters(declareMatch[6] ?? "");
+        const type = declareMatch[7] ?? (subOrFunc === "sub" ? "Void" : "Variant");
 
         const declareSymbol: SymbolInfo = {
           name,
@@ -419,7 +423,7 @@ export class SymbolParser {
           },
           fileUri,
           containerName: activeNamespace,
-          description: pendingDescription || `Importação de API Win32 de ${declareMatch[4]}`,
+          description: pendingDescription || `Importação de API Win32 de ${declareMatch[4] ?? "?"}`,
         };
         fileSymbols.symbols.push(declareSymbol);
         pendingDescription = "";
@@ -442,14 +446,14 @@ export class SymbolParser {
         /^(?:(Private|Public|Protected|Shared|Overridable|Overrides)\s+)*(Sub|Function)\s+([a-zA-Z0-9_]+)(?:\s*\(([^)]*)\))?(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
           trimmed,
         );
-      if (methodMatch) {
-        const modifiers = (methodMatch[0] || "").toLowerCase();
+      if (methodMatch?.[3]) {
+        const modifiers = methodMatch[0].toLowerCase();
         const isPrivate = modifiers.includes("private");
         const isShared = modifiers.includes("shared") || (!activeClass && !!activeNamespace);
         const name = methodMatch[3];
-        const params = this.parseParameters(methodMatch[4]);
+        const params = this.parseParameters(methodMatch[4] ?? "");
         const type =
-          methodMatch[5] || (methodMatch[2].toLowerCase() === "sub" ? "Void" : "Variant");
+          methodMatch[5] ?? ((methodMatch[2] ?? "").toLowerCase() === "sub" ? "Void" : "Variant");
 
         if (name.toLowerCase() !== "new" || activeClass) {
           const methodSymbol: SymbolInfo = {
@@ -482,7 +486,7 @@ export class SymbolParser {
           /^(?:(Private|Public|Protected|Shared|ReadOnly|WriteOnly)\s+)*(?:Dim\s+)?([a-zA-Z0-9_]+)(?:\s+As\s+(?:New\s+)?([a-zA-Z0-9_.]+))?/i.exec(
             trimmed,
           );
-        if (varMatch && (activeClass || activeStructure || activeNamespace)) {
+        if (varMatch?.[2] && (activeClass || activeStructure || activeNamespace)) {
           const name = varMatch[2];
           const lowerName = name.toLowerCase();
           const reserved = [
@@ -523,12 +527,12 @@ export class SymbolParser {
           ];
 
           if (!reserved.includes(lowerName)) {
-            const modifiers = (varMatch[0] || "").toLowerCase();
+            const modifiers = varMatch[0].toLowerCase();
             const isPrivate =
               modifiers.includes("private") ||
               (!modifiers.includes("public") && !modifiers.includes("shared"));
             const isShared = modifiers.includes("shared") || (!activeClass && !!activeNamespace);
-            const type = varMatch[3] || "Variant";
+            const type = varMatch[3] ?? "Variant";
 
             const varSymbol: SymbolInfo = {
               name,
@@ -570,6 +574,20 @@ export class WorkspaceSymbolIndexer {
   public static getInstance(): WorkspaceSymbolIndexer {
     WorkspaceSymbolIndexer.instance ??= new WorkspaceSymbolIndexer();
     return WorkspaceSymbolIndexer.instance;
+  }
+
+  /**
+   * Creates a brand-new indexer instance that does NOT share state with the
+   * extension-host singleton. Intended for build-time / CLI flows that need
+   * a deterministic, isolated view of a project (no leakage from previously
+   * opened workspaces, no mutation that survives the build).
+   *
+   * Production callers should still prefer {@link getInstance} so that the
+   * indexing cache is reused across providers. Use this only when the caller
+   * is itself short-lived and owns the lifecycle of the result.
+   */
+  public static createDetached(): WorkspaceSymbolIndexer {
+    return new WorkspaceSymbolIndexer();
   }
 
   private getCacheKey(fileUri: string): string {
@@ -634,6 +652,19 @@ export class WorkspaceSymbolIndexer {
       const folderPath = folder.uri.fsPath;
       await this.scanDir(folderPath);
     }
+  }
+
+  /**
+   * Re-scans a single directory recursively. Used by flows that mutate a
+   * narrow slice of the workspace (e.g. `data7_modules/` right after a
+   * module import) and want to avoid the cost of re-indexing every file
+   * under every workspace folder.
+   *
+   * Caller is responsible for picking a directory that lives inside the
+   * workspace; this method does NOT validate that.
+   */
+  public async indexDirectory(directoryPath: string): Promise<void> {
+    await this.scanDir(directoryPath);
   }
 
   public deleteWorkspaceFolder(deletedPath: string): void {
@@ -790,8 +821,14 @@ export class WorkspaceSymbolIndexer {
     const lowerName = name.toLowerCase();
     const allSymbols = this.getAllSymbols();
 
-    // 1. Look for exact match
-    let match = allSymbols.find((s) => s.name.toLowerCase() === lowerName);
+    // 1. Look for exact match. When more than one cached symbol shares the
+    //    name (e.g. the same namespace exists in `data7_modules/` AND in a
+    //    repository file that was opened outside the workspace), prefer the
+    //    workspace copy. This keeps go-to-definition and hover deterministic
+    //    even if the cache still holds a stale outside-workspace entry from
+    //    a previous session.
+    const matches = allSymbols.filter((s) => s.name.toLowerCase() === lowerName);
+    let match = WorkspaceSymbolIndexer.preferWorkspaceMatch(matches);
     if (match) {
       if (this.isFileValid(match.fileUri)) {
         return match;
@@ -807,13 +844,16 @@ export class WorkspaceSymbolIndexer {
       if (fileSym) {
         for (const imp of fileSym.imports) {
           const qualifiedName = `${imp}.${name}`.toLowerCase();
-          // Match qualified symbols or namespaces
-          match = allSymbols.find((s) => {
+          // Match qualified symbols or namespaces — keep the same
+          // workspace-first preference here so an imported namespace also
+          // resolves to its workspace copy when duplicates exist.
+          const qualifiedMatches = allSymbols.filter((s) => {
             const symbolQualName = s.containerName
               ? `${s.containerName}.${s.name}`.toLowerCase()
               : s.name.toLowerCase();
             return symbolQualName === qualifiedName;
           });
+          match = WorkspaceSymbolIndexer.preferWorkspaceMatch(qualifiedMatches);
           if (match) {
             if (this.isFileValid(match.fileUri)) {
               return match;
@@ -830,51 +870,31 @@ export class WorkspaceSymbolIndexer {
   }
 
   /**
-   * Find a class member (method, property, variable, etc.) in a class or its parents recursively in the workspace
+   * Returns the first match that belongs to an open workspace folder. Falls
+   * back to the first entry otherwise. Centralised so every lookup path
+   * applies the same precedence rule.
    */
-  public findClassMember(className: string, memberName: string): SymbolInfo | undefined {
-    const memberLower = memberName.toLowerCase();
-    const allSymbols = this.getAllSymbols();
-
-    // Scan current class in workspace
-    let match = allSymbols.find(
-      (s) =>
-        s.containerName?.toLowerCase() === className.toLowerCase() &&
-        s.name.toLowerCase() === memberLower,
-    );
-    if (match) {
-      if (this.isFileValid(match.fileUri)) {
-        return match;
-      } else {
-        this.removeFile(match.fileUri);
-        return this.findClassMember(className, memberName);
+  private static preferWorkspaceMatch(matches: readonly SymbolInfo[]): SymbolInfo | undefined {
+    if (matches.length === 0) return undefined;
+    if (matches.length === 1) return matches[0];
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) return matches[0];
+    const isInsideWorkspace = (fileUri: string): boolean => {
+      if (fileUri.startsWith("system://")) return false;
+      try {
+        const fsPath = vscode.Uri.parse(fileUri).fsPath;
+        const normalized = path.normalize(fsPath).toLowerCase();
+        return folders.some((folder) => {
+          const folderPath = path.normalize(folder.uri.fsPath).toLowerCase();
+          if (normalized === folderPath) return true;
+          const prefix = folderPath.endsWith(path.sep) ? folderPath : folderPath + path.sep;
+          return normalized.startsWith(prefix);
+        });
+      } catch {
+        return false;
       }
-    }
-
-    // Scan parent classes recursively in workspace
-    let currentClass = this.findSymbolByName(className);
-    const visited = new Set<string>();
-    while (currentClass?.inheritsFrom && !visited.has(currentClass.name.toLowerCase())) {
-      visited.add(currentClass.name.toLowerCase());
-      const parentName = currentClass.inheritsFrom;
-
-      match = allSymbols.find(
-        (s) =>
-          s.containerName?.toLowerCase() === parentName.toLowerCase() &&
-          s.name.toLowerCase() === memberLower,
-      );
-      if (match) {
-        if (this.isFileValid(match.fileUri)) {
-          return match;
-        } else {
-          this.removeFile(match.fileUri);
-          return this.findClassMember(className, memberName);
-        }
-      }
-
-      currentClass = this.findSymbolByName(parentName);
-    }
-
-    return undefined;
+    };
+    const workspaceMatch = matches.find((m) => isInsideWorkspace(m.fileUri));
+    return workspaceMatch ?? matches[0];
   }
 }

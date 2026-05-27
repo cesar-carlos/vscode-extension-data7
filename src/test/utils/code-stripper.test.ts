@@ -59,11 +59,13 @@ describe("stripCommentsAndStrings (multi-line)", () => {
     const out = stripCommentsAndStrings(input);
     const lines = out.split("\n");
     assert.equal(lines.length, 3);
-    assert.ok(lines[0].includes("Line1"));
-    assert.ok(lines[1].includes("Line2 "));
-    assert.ok(!lines[1].includes("comment"));
+    const [l0, l1, l2] = lines;
+    assert.ok(l0 && l1 && l2);
+    assert.ok(l0.includes("Line1"));
+    assert.ok(l1.includes("Line2 "));
+    assert.ok(!l1.includes("comment"));
     // The third line had only a literal — its quotes stay but the body is blank.
-    assert.ok(lines[2].startsWith('"'));
-    assert.ok(!lines[2].includes("strung"));
+    assert.ok(l2.startsWith('"'));
+    assert.ok(!l2.includes("strung"));
   });
 });

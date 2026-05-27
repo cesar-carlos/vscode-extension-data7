@@ -65,9 +65,12 @@ export class DependencyScanner {
         const content = fs.readFileSync(filePath, "utf-8");
         const filename = path.basename(filePath, ".bas");
 
-        // Match "Namespace namespace_name"
+        // Match "Namespace namespace_name". Group 1 is mandatory in the
+        // pattern, so when `nsMatch` is truthy `nsMatch[1]` is a string —
+        // but `noUncheckedIndexedAccess` widens the array element so we
+        // narrow with a fallback to the bare filename.
         const nsMatch = /\bNamespace\s+([a-zA-Z0-9_]+)/i.exec(content);
-        const modName = nsMatch ? nsMatch[1] : filename;
+        const modName = nsMatch?.[1] ?? filename;
 
         map.set(modName.toLowerCase(), {
           moduleName: modName,
@@ -126,8 +129,10 @@ export class DependencyScanner {
     ) {
       return "";
     }
+    // `String.prototype.split` always returns at least one element, so the
+    // `?? line` fallback is purely a `noUncheckedIndexedAccess` formality.
     const parts = line.split("'");
-    return parts[0];
+    return parts[0] ?? line;
   }
 
   // Helper to resolve module name using direct name or mod_ prefix
@@ -176,8 +181,9 @@ export class DependencyScanner {
       try {
         const content = fs.readFileSync(file, "utf-8");
         const nsMatch = /\bNamespace\s+([a-zA-Z0-9_]+)/i.exec(content);
-        if (nsMatch) {
-          localModules.add(nsMatch[1].toLowerCase());
+        const ns = nsMatch?.[1];
+        if (ns) {
+          localModules.add(ns.toLowerCase());
         }
       } catch {
         /* file unreadable — skip namespace inference */
@@ -196,7 +202,9 @@ export class DependencyScanner {
         importsRegex.lastIndex = 0;
         let match;
         while ((match = importsRegex.exec(content)) !== null) {
-          const resolved = this.resolveModuleName(match[1], localModules, availableSharedModules);
+          const importName = match[1];
+          if (!importName) continue;
+          const resolved = this.resolveModuleName(importName, localModules, availableSharedModules);
           if (resolved) {
             referenced.add(resolved);
           }
@@ -205,7 +213,9 @@ export class DependencyScanner {
         // 2. Scan direct references
         let dMatch;
         while ((dMatch = directCallRegex.exec(content)) !== null) {
-          const resolved = this.resolveModuleName(dMatch[1], localModules, availableSharedModules);
+          const callName = dMatch[1];
+          if (!callName) continue;
+          const resolved = this.resolveModuleName(callName, localModules, availableSharedModules);
           if (resolved) {
             referenced.add(resolved);
           }

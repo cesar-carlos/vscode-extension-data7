@@ -34,7 +34,9 @@ export function stripCommentsAndStringsLine(line: string): string {
   let i = 0;
   let inString = false;
   while (i < line.length) {
-    const ch = line[i];
+    // `i < line.length` guarantees `line[i]` is defined; the `?? ""` keeps
+    // `noUncheckedIndexedAccess` happy without changing runtime semantics.
+    const ch = line[i] ?? "";
     if (inString) {
       if (ch === '"') {
         // Escaped quote `""` → still inside the string, swallow the second one too.
