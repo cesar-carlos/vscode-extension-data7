@@ -1,6 +1,9 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as vscode from 'vscode';
+import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
+import { logger } from "../infra/logger";
+import { IMPORTS_REGEX_ANCHORED } from "./dependency-scanner";
+import { isExcluded } from "../infra/configuration";
 
 // Parameter info
 export interface ParameterInfo {
@@ -14,11 +17,34 @@ export interface ParameterInfo {
 // Symbol info
 export interface SymbolInfo {
   name: string;
-  kind: 'namespace' | 'class' | 'structure' | 'delegate' | 'method' | 'property' | 'variable' | 'declare_sub' | 'declare_function';
+  /**
+   * `indexed-property` é a forma Delphi de uma propriedade que aceita
+   * argumentos (ex.: `Grid.Cells(ACol, ARow)` ou `Grid.ColWidth(ACol)`). É
+   * tratada como property pelo resolvedor (sem invocação de método obrigatória)
+   * mas o hover/SignatureHelp mostram a lista de parâmetros.
+   */
+  kind:
+    | "namespace"
+    | "class"
+    | "structure"
+    | "delegate"
+    | "method"
+    | "property"
+    | "indexed-property"
+    | "variable"
+    | "declare_sub"
+    | "declare_function";
   type: string;
   isShared: boolean;
   isPrivate: boolean;
   parameters?: ParameterInfo[];
+  /**
+   * Overloads adicionais do mesmo método/property indexada — quando preenchido,
+   * `parameters` representa a assinatura primária (a primeira mostrada) e
+   * `overloads` lista as alternativas. O SignatureHelpProvider exibe todas e
+   * destaca a que corresponde ao número de argumentos no call site.
+   */
+  overloads?: ParameterInfo[][];
   range: {
     startLine: number;
     startChar: number;
@@ -29,6 +55,13 @@ export interface SymbolInfo {
   containerName?: string; // e.g. NamespaceName or ClassName
   description?: string;
   inheritsFrom?: string;
+  /**
+   * Marca membros que aparecem no autocomplete da linguagem original mas que o
+   * compilador Data7 não traduz. Usados pelo linter para emitir o diagnóstico
+   * `unsupported-member` (ver `src/diagnostic-codes.ts`) e pelos providers de
+   * completion/hover para exibirem o item como deprecated.
+   */
+  isUnsupported?: boolean;
 }
 
 export interface FileSymbols {
@@ -41,58 +74,58 @@ export interface FileSymbols {
 export class SymbolParser {
   public static parseParameters(paramsStr: string): ParameterInfo[] {
     const result: ParameterInfo[] = [];
-    if (!paramsStr || !paramsStr.trim()) {
+    if (!paramsStr.trim()) {
       return result;
     }
     // Simple split by comma
-    const parts = paramsStr.split(',');
+    const parts = paramsStr.split(",");
     for (const part of parts) {
       const trimmed = part.trim();
       if (!trimmed) continue;
-      
+
       let isByRef = false;
       let isOptional = false;
       let pText = trimmed;
-      
+
       // Check ByVal / ByRef
-      if (pText.toLowerCase().startsWith('byref ')) {
+      if (pText.toLowerCase().startsWith("byref ")) {
         isByRef = true;
         pText = pText.substring(6).trim();
-      } else if (pText.toLowerCase().startsWith('byval ')) {
+      } else if (pText.toLowerCase().startsWith("byval ")) {
         pText = pText.substring(6).trim();
       }
-      
+
       // Check Optional
-      if (pText.toLowerCase().startsWith('optional ')) {
+      if (pText.toLowerCase().startsWith("optional ")) {
         isOptional = true;
         pText = pText.substring(9).trim();
       }
-      
-      let name = '';
-      let type = 'Variant';
+
+      let name = "";
+      let type = "Variant";
       let defaultValue: string | undefined;
-      
-      const eqIdx = pText.indexOf('=');
+
+      const eqIdx = pText.indexOf("=");
       if (eqIdx !== -1) {
         defaultValue = pText.substring(eqIdx + 1).trim();
         pText = pText.substring(0, eqIdx).trim();
         isOptional = true;
       }
-      
-      const asIdx = pText.toLowerCase().lastIndexOf(' as ');
+
+      const asIdx = pText.toLowerCase().lastIndexOf(" as ");
       if (asIdx !== -1) {
         name = pText.substring(0, asIdx).trim();
         type = pText.substring(asIdx + 4).trim();
       } else {
         name = pText;
       }
-      
+
       result.push({
         name,
         type,
         isByRef,
         isOptional,
-        defaultValue
+        defaultValue,
       });
     }
     return result;
@@ -104,7 +137,7 @@ export class SymbolParser {
       fileUri,
       filePath: vscode.Uri.parse(fileUri).fsPath,
       imports: [],
-      symbols: []
+      symbols: [],
     };
 
     let activeNamespace: string | undefined;
@@ -112,20 +145,23 @@ export class SymbolParser {
     let activeStructure: SymbolInfo | undefined;
     let activeProperty: SymbolInfo | undefined;
     let activeMethod: SymbolInfo | undefined;
-    
-    let pendingDescription = '';
+
+    let pendingDescription = "";
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
       const line = lines[lineIdx];
       const trimmed = line.trim();
 
       // 1. Check comments
-      if (trimmed.startsWith("'") || trimmed.toLowerCase().startsWith('rem ')) {
-        const commentContent = trimmed.startsWith("'") ? trimmed.substring(1) : trimmed.substring(4);
+      if (trimmed.startsWith("'") || trimmed.toLowerCase().startsWith("rem ")) {
+        const commentContent = trimmed.startsWith("'")
+          ? trimmed.substring(1)
+          : trimmed.substring(4);
         const cleaned = commentContent.trim();
-        if (!cleaned.startsWith('@')) { // skip metadata tags like @Module
+        if (!cleaned.startsWith("@")) {
+          // skip metadata tags like @Module
           if (pendingDescription) {
-            pendingDescription += '\n' + cleaned;
+            pendingDescription += "\n" + cleaned;
           } else {
             pendingDescription = cleaned;
           }
@@ -134,200 +170,239 @@ export class SymbolParser {
       }
 
       if (!trimmed) {
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       const lowerTrimmed = trimmed.toLowerCase();
 
       // 2. Imports
-      const importMatch = trimmed.match(/^Imports\s+([a-zA-Z0-9_.]+)/i);
+      const importMatch = trimmed.match(IMPORTS_REGEX_ANCHORED);
       if (importMatch) {
         fileSymbols.imports.push(importMatch[1]);
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 3. Namespace end
-      if (lowerTrimmed === 'end namespace') {
+      if (lowerTrimmed === "end namespace") {
         activeNamespace = undefined;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 4. Namespace start
-      const nsMatch = trimmed.match(/^Namespace\s+([a-zA-Z0-9_.]+)/i);
+      const nsMatch = /^Namespace\s+([a-zA-Z0-9_.]+)/i.exec(trimmed);
       if (nsMatch) {
         activeNamespace = nsMatch[1];
         const nsSymbol: SymbolInfo = {
           name: activeNamespace,
-          kind: 'namespace',
-          type: 'Namespace',
+          kind: "namespace",
+          type: "Namespace",
           isShared: true,
           isPrivate: false,
-          range: { startLine: lineIdx, startChar: line.indexOf(activeNamespace), endLine: lineIdx, endChar: line.length },
+          range: {
+            startLine: lineIdx,
+            startChar: line.indexOf(activeNamespace),
+            endLine: lineIdx,
+            endChar: line.length,
+          },
           fileUri,
-          description: pendingDescription || `Namespace ${activeNamespace}`
+          description: pendingDescription || `Namespace ${activeNamespace}`,
         };
         fileSymbols.symbols.push(nsSymbol);
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 5. End Class
-      if (lowerTrimmed === 'end class') {
+      if (lowerTrimmed === "end class") {
         if (activeClass) {
           activeClass.range.endLine = lineIdx;
           activeClass.range.endChar = line.length;
         }
         activeClass = undefined;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 6. Inherits (inside class)
-      const inheritsMatch = trimmed.match(/^Inherits\s+([a-zA-Z0-9_.]+)/i);
+      const inheritsMatch = /^Inherits\s+([a-zA-Z0-9_.]+)/i.exec(trimmed);
       if (inheritsMatch && activeClass) {
         activeClass.inheritsFrom = inheritsMatch[1];
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 7. Class start
-      const classMatch = trimmed.match(/^(?:(Private|Public|Protected|Shared)\s+)*Class\s+([a-zA-Z0-9_]+)/i);
+      const classMatch = /^(?:(Private|Public|Protected|Shared)\s+)*Class\s+([a-zA-Z0-9_]+)/i.exec(
+        trimmed,
+      );
       if (classMatch) {
-        const modifiers = (classMatch[0] || '').toLowerCase();
-        const isPrivate = modifiers.includes('private');
-        const isShared = modifiers.includes('shared');
+        const modifiers = (classMatch[0] || "").toLowerCase();
+        const isPrivate = modifiers.includes("private");
+        const isShared = modifiers.includes("shared");
         const name = classMatch[2];
 
         const classSymbol: SymbolInfo = {
           name,
-          kind: 'class',
+          kind: "class",
           type: name,
           isShared,
           isPrivate,
-          range: { startLine: lineIdx, startChar: line.indexOf(name), endLine: lineIdx, endChar: line.length },
+          range: {
+            startLine: lineIdx,
+            startChar: line.indexOf(name),
+            endLine: lineIdx,
+            endChar: line.length,
+          },
           fileUri,
           containerName: activeNamespace,
-          description: pendingDescription || undefined
+          description: pendingDescription || undefined,
         };
         fileSymbols.symbols.push(classSymbol);
         activeClass = classSymbol;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 8. End Structure
-      if (lowerTrimmed === 'end structure') {
+      if (lowerTrimmed === "end structure") {
         if (activeStructure) {
           activeStructure.range.endLine = lineIdx;
           activeStructure.range.endChar = line.length;
         }
         activeStructure = undefined;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 9. Structure start
-      const structMatch = trimmed.match(/^(?:(Private|Public|Protected|Shared)\s+)*Structure\s+([a-zA-Z0-9_]+)/i);
+      const structMatch =
+        /^(?:(Private|Public|Protected|Shared)\s+)*Structure\s+([a-zA-Z0-9_]+)/i.exec(trimmed);
       if (structMatch) {
-        const modifiers = (structMatch[0] || '').toLowerCase();
-        const isPrivate = modifiers.includes('private');
-        const isShared = modifiers.includes('shared');
+        const modifiers = (structMatch[0] || "").toLowerCase();
+        const isPrivate = modifiers.includes("private");
+        const isShared = modifiers.includes("shared");
         const name = structMatch[2];
 
         const structSymbol: SymbolInfo = {
           name,
-          kind: 'structure',
+          kind: "structure",
           type: name,
           isShared,
           isPrivate,
-          range: { startLine: lineIdx, startChar: line.indexOf(name), endLine: lineIdx, endChar: line.length },
+          range: {
+            startLine: lineIdx,
+            startChar: line.indexOf(name),
+            endLine: lineIdx,
+            endChar: line.length,
+          },
           fileUri,
-          containerName: activeClass?.name || activeNamespace,
-          description: pendingDescription || undefined
+          containerName: activeClass?.name ?? activeNamespace,
+          description: pendingDescription || undefined,
         };
         fileSymbols.symbols.push(structSymbol);
         activeStructure = structSymbol;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 10. End Property
-      if (lowerTrimmed === 'end property') {
+      if (lowerTrimmed === "end property") {
         if (activeProperty) {
           activeProperty.range.endLine = lineIdx;
           activeProperty.range.endChar = line.length;
         }
         activeProperty = undefined;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 11. Property start
-      const propMatch = trimmed.match(/^(?:(Private|Public|Protected|Shared|ReadOnly|WriteOnly)\s+)*Property\s+([a-zA-Z0-9_]+)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i);
+      const propMatch =
+        /^(?:(Private|Public|Protected|Shared|ReadOnly|WriteOnly)\s+)*Property\s+([a-zA-Z0-9_]+)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
+          trimmed,
+        );
       if (propMatch) {
-        const modifiers = (propMatch[0] || '').toLowerCase();
-        const isPrivate = modifiers.includes('private');
-        const isShared = modifiers.includes('shared');
+        const modifiers = (propMatch[0] || "").toLowerCase();
+        const isPrivate = modifiers.includes("private");
+        const isShared = modifiers.includes("shared");
         const name = propMatch[2];
-        const type = propMatch[3] || 'Variant';
+        const type = propMatch[3] || "Variant";
 
         const propSymbol: SymbolInfo = {
           name,
-          kind: 'property',
+          kind: "property",
           type,
           isShared,
           isPrivate,
-          range: { startLine: lineIdx, startChar: line.indexOf(name), endLine: lineIdx, endChar: line.length },
+          range: {
+            startLine: lineIdx,
+            startChar: line.indexOf(name),
+            endLine: lineIdx,
+            endChar: line.length,
+          },
           fileUri,
-          containerName: activeClass?.name || activeNamespace,
-          description: pendingDescription || undefined
+          containerName: activeClass?.name ?? activeNamespace,
+          description: pendingDescription || undefined,
         };
         fileSymbols.symbols.push(propSymbol);
         activeProperty = propSymbol;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 12. Delegate
-      const delegateMatch = trimmed.match(/^(?:(Private|Public|Protected|Shared)\s+)*Delegate\s+(Sub|Function)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i);
+      const delegateMatch =
+        /^(?:(Private|Public|Protected|Shared)\s+)*Delegate\s+(Sub|Function)\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
+          trimmed,
+        );
       if (delegateMatch) {
-        const modifiers = (delegateMatch[0] || '').toLowerCase();
-        const isPrivate = modifiers.includes('private');
-        const isShared = modifiers.includes('shared');
+        const modifiers = (delegateMatch[0] || "").toLowerCase();
+        const isPrivate = modifiers.includes("private");
+        const isShared = modifiers.includes("shared");
         const name = delegateMatch[3];
         const params = this.parseParameters(delegateMatch[4]);
-        const type = delegateMatch[5] || (delegateMatch[2].toLowerCase() === 'sub' ? 'Void' : 'Variant');
+        const type =
+          delegateMatch[5] || (delegateMatch[2].toLowerCase() === "sub" ? "Void" : "Variant");
 
         const delegateSymbol: SymbolInfo = {
           name,
-          kind: 'delegate',
+          kind: "delegate",
           type,
           isShared,
           isPrivate,
           parameters: params,
-          range: { startLine: lineIdx, startChar: line.indexOf(name), endLine: lineIdx, endChar: line.length },
+          range: {
+            startLine: lineIdx,
+            startChar: line.indexOf(name),
+            endLine: lineIdx,
+            endChar: line.length,
+          },
           fileUri,
-          containerName: activeClass?.name || activeNamespace,
-          description: pendingDescription || undefined
+          containerName: activeClass?.name ?? activeNamespace,
+          description: pendingDescription || undefined,
         };
         fileSymbols.symbols.push(delegateSymbol);
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 13. Declare Function / Sub
-      const declareMatch = trimmed.match(/^(?:(Private|Public|Protected|Shared)\s+)*Declare\s+(Sub|Function)\s+([a-zA-Z0-9_]+)\s+Lib\s+"([^"]+)"(?:\s+Alias\s+"([^"]+)")?\s*\(([^)]*)\)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i);
+      const declareMatch =
+        /^(?:(Private|Public|Protected|Shared)\s+)*Declare\s+(Sub|Function)\s+([a-zA-Z0-9_]+)\s+Lib\s+"([^"]+)"(?:\s+Alias\s+"([^"]+)")?\s*\(([^)]*)\)(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
+          trimmed,
+        );
       if (declareMatch) {
-        const modifiers = declareMatch[1] ? declareMatch[1].toLowerCase() : '';
-        const isPrivate = modifiers.includes('private') || modifiers === '';
+        const modifiers = declareMatch[1] ? declareMatch[1].toLowerCase() : "";
+        const isPrivate = modifiers.includes("private") || modifiers === "";
         const isShared = true;
-        const kind = declareMatch[2].toLowerCase() === 'sub' ? 'declare_sub' : 'declare_function';
+        const kind = declareMatch[2].toLowerCase() === "sub" ? "declare_sub" : "declare_function";
         const name = declareMatch[3];
         const params = this.parseParameters(declareMatch[6]);
-        const type = declareMatch[7] || (declareMatch[2].toLowerCase() === 'sub' ? 'Void' : 'Variant');
+        const type =
+          declareMatch[7] || (declareMatch[2].toLowerCase() === "sub" ? "Void" : "Variant");
 
         const declareSymbol: SymbolInfo = {
           name,
@@ -336,88 +411,147 @@ export class SymbolParser {
           isShared,
           isPrivate,
           parameters: params,
-          range: { startLine: lineIdx, startChar: line.indexOf(name), endLine: lineIdx, endChar: line.length },
+          range: {
+            startLine: lineIdx,
+            startChar: line.indexOf(name),
+            endLine: lineIdx,
+            endChar: line.length,
+          },
           fileUri,
           containerName: activeNamespace,
-          description: pendingDescription || `Importação de API Win32 de ${declareMatch[4]}`
+          description: pendingDescription || `Importação de API Win32 de ${declareMatch[4]}`,
         };
         fileSymbols.symbols.push(declareSymbol);
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 14. End Sub / Function
-      if (lowerTrimmed === 'end sub' || lowerTrimmed === 'end function') {
+      if (lowerTrimmed === "end sub" || lowerTrimmed === "end function") {
         if (activeMethod) {
           activeMethod.range.endLine = lineIdx;
           activeMethod.range.endChar = line.length;
         }
         activeMethod = undefined;
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 15. Sub / Function start
-      const methodMatch = trimmed.match(/^(?:(Private|Public|Protected|Shared|Overridable|Overrides)\s+)*(Sub|Function)\s+([a-zA-Z0-9_]+)(?:\s*\(([^)]*)\))?(?:\s+As\s+([a-zA-Z0-9_.]+))?/i);
+      const methodMatch =
+        /^(?:(Private|Public|Protected|Shared|Overridable|Overrides)\s+)*(Sub|Function)\s+([a-zA-Z0-9_]+)(?:\s*\(([^)]*)\))?(?:\s+As\s+([a-zA-Z0-9_.]+))?/i.exec(
+          trimmed,
+        );
       if (methodMatch) {
-        const modifiers = (methodMatch[0] || '').toLowerCase();
-        const isPrivate = modifiers.includes('private');
-        const isShared = modifiers.includes('shared') || (!activeClass && !!activeNamespace);
+        const modifiers = (methodMatch[0] || "").toLowerCase();
+        const isPrivate = modifiers.includes("private");
+        const isShared = modifiers.includes("shared") || (!activeClass && !!activeNamespace);
         const name = methodMatch[3];
         const params = this.parseParameters(methodMatch[4]);
-        const type = methodMatch[5] || (methodMatch[2].toLowerCase() === 'sub' ? 'Void' : 'Variant');
+        const type =
+          methodMatch[5] || (methodMatch[2].toLowerCase() === "sub" ? "Void" : "Variant");
 
-        if (name.toLowerCase() !== 'new' || activeClass) {
+        if (name.toLowerCase() !== "new" || activeClass) {
           const methodSymbol: SymbolInfo = {
             name,
-            kind: 'method',
+            kind: "method",
             type,
             isShared,
             isPrivate,
             parameters: params,
-            range: { startLine: lineIdx, startChar: line.indexOf(name), endLine: lineIdx, endChar: line.length },
+            range: {
+              startLine: lineIdx,
+              startChar: line.indexOf(name),
+              endLine: lineIdx,
+              endChar: line.length,
+            },
             fileUri,
-            containerName: activeClass?.name || activeNamespace,
-            description: pendingDescription || undefined
+            containerName: activeClass?.name ?? activeNamespace,
+            description: pendingDescription || undefined,
           };
           fileSymbols.symbols.push(methodSymbol);
           activeMethod = methodSymbol;
         }
-        pendingDescription = '';
+        pendingDescription = "";
         continue;
       }
 
       // 16. Fields / Variables (Dim)
       if (!activeMethod && !activeProperty) {
-        const varMatch = trimmed.match(/^(?:(Private|Public|Protected|Shared|ReadOnly|WriteOnly)\s+)*(?:Dim\s+)?([a-zA-Z0-9_]+)(?:\s+As\s+(?:New\s+)?([a-zA-Z0-9_.]+))?/i);
+        const varMatch =
+          /^(?:(Private|Public|Protected|Shared|ReadOnly|WriteOnly)\s+)*(?:Dim\s+)?([a-zA-Z0-9_]+)(?:\s+As\s+(?:New\s+)?([a-zA-Z0-9_.]+))?/i.exec(
+            trimmed,
+          );
         if (varMatch && (activeClass || activeStructure || activeNamespace)) {
           const name = varMatch[2];
           const lowerName = name.toLowerCase();
-          const reserved = ['if', 'else', 'elseif', 'select', 'case', 'for', 'each', 'do', 'loop', 'while', 'until', 'try', 'catch', 'finally', 'end', 'exit', 'return', 'next', 'throw', 'imports', 'namespace', 'class', 'structure', 'delegate', 'property', 'sub', 'function', 'declare', 'shared', 'private', 'public', 'protected', 'inherits', 'with'];
-          
+          const reserved = [
+            "if",
+            "else",
+            "elseif",
+            "select",
+            "case",
+            "for",
+            "each",
+            "do",
+            "loop",
+            "while",
+            "until",
+            "try",
+            "catch",
+            "finally",
+            "end",
+            "exit",
+            "return",
+            "next",
+            "throw",
+            "imports",
+            "namespace",
+            "class",
+            "structure",
+            "delegate",
+            "property",
+            "sub",
+            "function",
+            "declare",
+            "shared",
+            "private",
+            "public",
+            "protected",
+            "inherits",
+            "with",
+          ];
+
           if (!reserved.includes(lowerName)) {
-            const modifiers = (varMatch[0] || '').toLowerCase();
-            const isPrivate = modifiers.includes('private') || (!modifiers.includes('public') && !modifiers.includes('shared'));
-            const isShared = modifiers.includes('shared') || (!activeClass && !!activeNamespace);
-            const type = varMatch[3] || 'Variant';
+            const modifiers = (varMatch[0] || "").toLowerCase();
+            const isPrivate =
+              modifiers.includes("private") ||
+              (!modifiers.includes("public") && !modifiers.includes("shared"));
+            const isShared = modifiers.includes("shared") || (!activeClass && !!activeNamespace);
+            const type = varMatch[3] || "Variant";
 
             const varSymbol: SymbolInfo = {
               name,
-              kind: 'variable',
+              kind: "variable",
               type,
               isShared,
               isPrivate,
-              range: { startLine: lineIdx, startChar: line.indexOf(name), endLine: lineIdx, endChar: line.length },
+              range: {
+                startLine: lineIdx,
+                startChar: line.indexOf(name),
+                endLine: lineIdx,
+                endChar: line.length,
+              },
               fileUri,
-              containerName: activeClass?.name || activeStructure?.name || activeNamespace,
-              description: pendingDescription || undefined
+              containerName: activeClass?.name ?? activeStructure?.name ?? activeNamespace,
+              description: pendingDescription || undefined,
             };
             fileSymbols.symbols.push(varSymbol);
           }
         }
       }
 
-      pendingDescription = '';
+      pendingDescription = "";
     }
 
     return fileSymbols;
@@ -425,20 +559,21 @@ export class SymbolParser {
 }
 
 export class WorkspaceSymbolIndexer {
-  private static instance: WorkspaceSymbolIndexer;
+  private static instance: WorkspaceSymbolIndexer | undefined;
   private cache = new Map<string, FileSymbols>(); // fileUri -> FileSymbols
 
-  private constructor() {}
+  // Singleton — the private constructor prevents instantiation outside `getInstance`.
+  private constructor() {
+    /* intentional: enforces singleton */
+  }
 
   public static getInstance(): WorkspaceSymbolIndexer {
-    if (!WorkspaceSymbolIndexer.instance) {
-      WorkspaceSymbolIndexer.instance = new WorkspaceSymbolIndexer();
-    }
+    WorkspaceSymbolIndexer.instance ??= new WorkspaceSymbolIndexer();
     return WorkspaceSymbolIndexer.instance;
   }
 
   private getCacheKey(fileUri: string): string {
-    if (fileUri.toLowerCase().startsWith('file:')) {
+    if (fileUri.toLowerCase().startsWith("file:")) {
       try {
         const filePath = vscode.Uri.parse(fileUri).fsPath;
         return path.normalize(filePath).toLowerCase();
@@ -453,7 +588,7 @@ export class WorkspaceSymbolIndexer {
    * Checks if a file is physically present on disk or currently open in VS Code.
    */
   public isFileValid(fileUri: string): boolean {
-    if (fileUri.startsWith('system://')) {
+    if (fileUri.startsWith("system://")) {
       return true;
     }
     try {
@@ -461,21 +596,23 @@ export class WorkspaceSymbolIndexer {
       if (fs.existsSync(filePath)) {
         return true;
       }
-      const documents = vscode.workspace.textDocuments || [];
-      const isOpen = documents.some(doc => {
+      const documents = vscode.workspace.textDocuments;
+      const isOpen = documents.some((doc) => {
         return this.getCacheKey(doc.uri.toString()) === this.getCacheKey(fileUri);
       });
       if (isOpen) {
         return true;
       }
-    } catch {}
+    } catch {
+      /* fall through to false */
+    }
     return false;
   }
 
   /**
    * Remove any cached files that no longer exist on disk and are not open in the editor
    */
-  public validateCache() {
+  public validateCache(): void {
     for (const cacheKey of Array.from(this.cache.keys())) {
       const fileSyms = this.cache.get(cacheKey);
       if (fileSyms && !this.isFileValid(fileSyms.fileUri)) {
@@ -487,18 +624,22 @@ export class WorkspaceSymbolIndexer {
   /**
    * Scan entire workspace recursively for .bas files and index them
    */
-  public async indexWorkspace(workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined) {
+  public async indexWorkspace(
+    workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined,
+  ): Promise<void> {
     this.validateCache();
     if (!workspaceFolders) return;
-    
+
     for (const folder of workspaceFolders) {
       const folderPath = folder.uri.fsPath;
       await this.scanDir(folderPath);
     }
   }
 
-  public deleteWorkspaceFolder(deletedPath: string) {
-    const deletedPathNormalized = deletedPath.endsWith(path.sep) ? deletedPath : deletedPath + path.sep;
+  public deleteWorkspaceFolder(deletedPath: string): void {
+    const deletedPathNormalized = deletedPath.endsWith(path.sep)
+      ? deletedPath
+      : deletedPath + path.sep;
     for (const cacheKey of Array.from(this.cache.keys())) {
       if (cacheKey === deletedPath || cacheKey.startsWith(deletedPathNormalized)) {
         this.cache.delete(cacheKey);
@@ -506,10 +647,10 @@ export class WorkspaceSymbolIndexer {
     }
   }
 
-  public renameWorkspaceFolder(oldPath: string, newPath: string) {
+  public renameWorkspaceFolder(oldPath: string, newPath: string): void {
     const oldPathNormalized = oldPath.endsWith(path.sep) ? oldPath : oldPath + path.sep;
     const newPathNormalized = newPath.endsWith(path.sep) ? newPath : newPath + path.sep;
-    
+
     for (const cacheKey of Array.from(this.cache.keys())) {
       if (cacheKey === oldPath) {
         const fileSyms = this.cache.get(cacheKey);
@@ -517,7 +658,7 @@ export class WorkspaceSymbolIndexer {
         if (fileSyms) {
           fileSyms.filePath = newPath;
           fileSyms.fileUri = vscode.Uri.file(newPath).toString();
-          fileSyms.symbols.forEach(s => {
+          fileSyms.symbols.forEach((s) => {
             s.fileUri = fileSyms.fileUri;
           });
           this.cache.set(newPath, fileSyms);
@@ -530,29 +671,33 @@ export class WorkspaceSymbolIndexer {
           const newFileKey = path.join(newPathNormalized, relative).toLowerCase();
           fileSyms.filePath = path.join(newPathNormalized, relative);
           fileSyms.fileUri = vscode.Uri.file(fileSyms.filePath).toString();
-          fileSyms.symbols.forEach(s => {
+          fileSyms.symbols.forEach((s) => {
             s.fileUri = fileSyms.fileUri;
           });
           this.cache.set(newFileKey, fileSyms);
         }
       }
     }
-    
+
     // Also re-scan the new path to ensure any files are fresh
-    this.scanDir(newPath).catch(err => console.error(err));
+    this.scanDir(newPath).catch((err) => {
+      logger.error("Falha ao reindexar caminho renomeado.", err);
+    });
   }
 
-  private async scanDir(dir: string) {
+  private async scanDir(dir: string): Promise<void> {
     if (!fs.existsSync(dir)) return;
+    if (isExcluded(dir)) return;
     const list = fs.readdirSync(dir);
     for (const file of list) {
       const filePath = path.join(dir, file);
       const stat = fs.statSync(filePath);
-      if (stat && stat.isDirectory()) {
+      if (stat.isDirectory()) {
         await this.scanDir(filePath);
       } else {
         const ext = path.extname(filePath).toLowerCase();
-        if (ext === '.bas' || ext === '.d7b') {
+        if (ext === ".bas" || ext === ".d7b") {
+          if (isExcluded(filePath)) continue;
           const fileUri = vscode.Uri.file(filePath).toString();
           this.indexFile(fileUri);
         }
@@ -563,39 +708,47 @@ export class WorkspaceSymbolIndexer {
   /**
    * Parse and cache a single file by URI
    */
-  public indexFile(fileUri: string) {
+  public indexFile(fileUri: string): void {
     try {
       const filePath = vscode.Uri.parse(fileUri).fsPath;
+      if (isExcluded(filePath)) return;
       const key = this.getCacheKey(fileUri);
       if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, 'utf-8');
+        const content = fs.readFileSync(filePath, "utf-8");
         const parsed = SymbolParser.parseBasFile(fileUri, content);
         this.cache.set(key, parsed);
       } else {
         this.cache.delete(key);
       }
-    } catch (err) {
-      console.error(`Erro ao indexar arquivo: ${fileUri}`, err);
+    } catch (err: unknown) {
+      logger.error(`Erro ao indexar arquivo: ${fileUri}`, err);
     }
   }
 
   /**
    * Update cache with active text content (useful for open editor changes)
    */
-  public updateFileContent(fileUri: string, content: string) {
+  public updateFileContent(fileUri: string, content: string): void {
     try {
       const parsed = SymbolParser.parseBasFile(fileUri, content);
       this.cache.set(this.getCacheKey(fileUri), parsed);
-    } catch (err) {
-      console.error(`Erro ao atualizar indexação para: ${fileUri}`, err);
+    } catch (err: unknown) {
+      logger.error(`Erro ao atualizar indexação para: ${fileUri}`, err);
     }
   }
 
   /**
    * Remove a file from index
    */
-  public removeFile(fileUri: string) {
+  public removeFile(fileUri: string): void {
     this.cache.delete(this.getCacheKey(fileUri));
+  }
+
+  /**
+   * Test-only hook: clears the entire cache so tests start from a known state.
+   */
+  public __resetForTests(): void {
+    this.cache.clear();
   }
 
   /**
@@ -623,6 +776,14 @@ export class WorkspaceSymbolIndexer {
   }
 
   /**
+   * Returns every cached `FileSymbols` entry. Used by reference/rename
+   * providers that need to scan the file bodies for whole-word matches.
+   */
+  public getAllFileSymbols(): FileSymbols[] {
+    return Array.from(this.cache.values());
+  }
+
+  /**
    * Resolve a type or namespace name by scanning imports and the global index
    */
   public findSymbolByName(name: string, contextFileUri?: string): SymbolInfo | undefined {
@@ -630,7 +791,7 @@ export class WorkspaceSymbolIndexer {
     const allSymbols = this.getAllSymbols();
 
     // 1. Look for exact match
-    let match = allSymbols.find(s => s.name.toLowerCase() === lowerName);
+    let match = allSymbols.find((s) => s.name.toLowerCase() === lowerName);
     if (match) {
       if (this.isFileValid(match.fileUri)) {
         return match;
@@ -643,12 +804,14 @@ export class WorkspaceSymbolIndexer {
     // 2. If we have imports, look under imported namespaces
     if (contextFileUri) {
       const fileSym = this.getFileSymbols(contextFileUri);
-      if (fileSym && fileSym.imports) {
+      if (fileSym) {
         for (const imp of fileSym.imports) {
           const qualifiedName = `${imp}.${name}`.toLowerCase();
           // Match qualified symbols or namespaces
-          match = allSymbols.find(s => {
-            const symbolQualName = s.containerName ? `${s.containerName}.${s.name}`.toLowerCase() : s.name.toLowerCase();
+          match = allSymbols.find((s) => {
+            const symbolQualName = s.containerName
+              ? `${s.containerName}.${s.name}`.toLowerCase()
+              : s.name.toLowerCase();
             return symbolQualName === qualifiedName;
           });
           if (match) {
@@ -674,9 +837,10 @@ export class WorkspaceSymbolIndexer {
     const allSymbols = this.getAllSymbols();
 
     // Scan current class in workspace
-    let match = allSymbols.find(s => 
-      s.containerName?.toLowerCase() === className.toLowerCase() && 
-      s.name.toLowerCase() === memberLower
+    let match = allSymbols.find(
+      (s) =>
+        s.containerName?.toLowerCase() === className.toLowerCase() &&
+        s.name.toLowerCase() === memberLower,
     );
     if (match) {
       if (this.isFileValid(match.fileUri)) {
@@ -690,13 +854,14 @@ export class WorkspaceSymbolIndexer {
     // Scan parent classes recursively in workspace
     let currentClass = this.findSymbolByName(className);
     const visited = new Set<string>();
-    while (currentClass && currentClass.inheritsFrom && !visited.has(currentClass.name.toLowerCase())) {
+    while (currentClass?.inheritsFrom && !visited.has(currentClass.name.toLowerCase())) {
       visited.add(currentClass.name.toLowerCase());
       const parentName = currentClass.inheritsFrom;
 
-      match = allSymbols.find(s => 
-        s.containerName?.toLowerCase() === parentName.toLowerCase() && 
-        s.name.toLowerCase() === memberLower
+      match = allSymbols.find(
+        (s) =>
+          s.containerName?.toLowerCase() === parentName.toLowerCase() &&
+          s.name.toLowerCase() === memberLower,
       );
       if (match) {
         if (this.isFileValid(match.fileUri)) {
