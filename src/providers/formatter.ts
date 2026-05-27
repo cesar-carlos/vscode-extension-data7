@@ -73,7 +73,8 @@ export class CodeFormatter {
     let result = "";
     let i = 0;
     while (i < code.length) {
-      const char = code[i];
+      // `i < code.length` guarantees `code[i]` is defined.
+      const char = code[i] ?? "";
       if (char === '"') {
         const endQuote = code.indexOf('"', i + 1);
         if (endQuote !== -1) {
@@ -86,7 +87,7 @@ export class CodeFormatter {
       } else {
         if (/[a-zA-Z0-9_]/.test(char)) {
           const start = i;
-          while (i < code.length && /[a-zA-Z0-9_]/.test(code[i])) {
+          while (i < code.length && /[a-zA-Z0-9_]/.test(code[i] ?? "")) {
             i++;
           }
           const word = code.substring(start, i);

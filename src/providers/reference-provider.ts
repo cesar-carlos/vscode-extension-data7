@@ -41,7 +41,7 @@ export class D7BasicReferenceProvider implements vscode.ReferenceProvider {
       const lines = cleaned.split(/\r?\n/);
       const regex = new RegExp(`\\b${escapeForRegex(word)}\\b`, "gi");
       for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
+        const line = lines[i] ?? "";
         let match: RegExpExecArray | null;
         regex.lastIndex = 0;
         while ((match = regex.exec(line)) !== null) {

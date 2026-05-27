@@ -1,7 +1,7 @@
 import "../_setup/global-hooks";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { describe, test } from "node:test";
+import { afterEach, describe, test } from "node:test";
 import { strict as assert } from "node:assert";
 import { WorkspaceSymbolIndexer } from "../../analysis/symbol-indexer";
 import { mockTextDocuments, registerOpenDocument, resetMockWorkspace } from "../_helpers/mock-doc";
@@ -109,6 +109,59 @@ describe("WorkspaceSymbolIndexer", () => {
 
       indexer.deleteWorkspaceFolder(folder);
       assert.equal(indexer.getFileSymbols(uri), undefined);
+    });
+  });
+
+  describe("findSymbolByName — workspace-first preference", () => {
+    afterEach(() => {
+      // Tests in this block mutate `workspaceFolders`; revert so siblings
+      // see the default `undefined`.
+      (vscode.workspace as unknown as { workspaceFolders: unknown }).workspaceFolders = undefined;
+    });
+
+    test("returns the workspace copy when a duplicate symbol exists outside the workspace", () => {
+      const indexer = WorkspaceSymbolIndexer.getInstance();
+
+      const workspaceDir = fakeAbsPath("dummy_project");
+      const workspaceFile = fakeAbsPath("dummy_project", "data7_modules", "mod_pipeline_form.bas");
+      const repoFile = fakeAbsPath(".data7_extension", "repository", "mod_pipeline_form.bas");
+      const workspaceUri = fileUriFor(workspaceFile);
+      const repoUri = fileUriFor(repoFile);
+
+      registerOpenDocument(workspaceUri, workspaceFile);
+      registerOpenDocument(repoUri, repoFile);
+
+      const namespaceCode = `Namespace mod_pipeline_form
+   Class TPipelineForm
+   End Class
+End Namespace`;
+      // Cache the OUTSIDE-workspace copy first so the regression also
+      // proves the preference walks every cached entry — not just the
+      // first inserted one.
+      indexer.updateFileContent(repoUri, namespaceCode);
+      indexer.updateFileContent(workspaceUri, namespaceCode);
+
+      (
+        vscode.workspace as unknown as { workspaceFolders: vscode.WorkspaceFolder[] }
+      ).workspaceFolders = [
+        { uri: vscode.Uri.file(workspaceDir), name: "dummy_project", index: 0 },
+      ];
+
+      const match = indexer.findSymbolByName("TPipelineForm");
+      assert.ok(match);
+      assert.equal(match.fileUri, workspaceUri);
+    });
+
+    test("falls back to the first cached match when no workspace folder is open", () => {
+      const indexer = WorkspaceSymbolIndexer.getInstance();
+      const orphanFile = fakeAbsPath("nowhere", "mod_x.bas");
+      const orphanUri = fileUriFor(orphanFile);
+      registerOpenDocument(orphanUri, orphanFile);
+      indexer.updateFileContent(orphanUri, "Namespace mod_x\nEnd Namespace");
+
+      const match = indexer.findSymbolByName("mod_x");
+      assert.ok(match);
+      assert.equal(match.fileUri, orphanUri);
     });
   });
 

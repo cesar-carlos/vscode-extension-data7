@@ -125,7 +125,7 @@ function rewriteDocument(
   const cleaned = stripCommentsAndStrings(fullText);
   const lines = cleaned.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i] ?? "";
     let m: RegExpExecArray | null;
     wordRegex.lastIndex = 0;
     while ((m = wordRegex.exec(line)) !== null) {

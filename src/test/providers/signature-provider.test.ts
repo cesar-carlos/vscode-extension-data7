@@ -29,7 +29,7 @@ End Namespace`;
       const provider = new D7BasicSignatureHelpProvider();
       // Position right after `x.Calc(`
       const helpLineIndex = 6;
-      const lineText = text.split("\n")[helpLineIndex];
+      const lineText = text.split("\n")[helpLineIndex] ?? "";
       const col = lineText.indexOf("(") + 1;
       const help = (await Promise.resolve(
         provider.provideSignatureHelp(
@@ -47,7 +47,9 @@ End Namespace`;
 
       assert.ok(help, "must return SignatureHelp for known method");
       assert.ok(help.signatures.length >= 1);
-      assert.match(help.signatures[0].label, /Calc/);
+      const [primarySig] = help.signatures;
+      assert.ok(primarySig);
+      assert.match(primarySig.label, /Calc/);
       assert.equal(
         help.activeParameter,
         0,
@@ -73,7 +75,7 @@ End Namespace`;
       const provider = new D7BasicSignatureHelpProvider();
       // Position right after the second comma — should target the 3rd param.
       const lineIndex = 5;
-      const lineText = text.split("\n")[lineIndex];
+      const lineText = text.split("\n")[lineIndex] ?? "";
       const col = lineText.lastIndexOf(",") + 1;
       const help = (await Promise.resolve(
         provider.provideSignatureHelp(

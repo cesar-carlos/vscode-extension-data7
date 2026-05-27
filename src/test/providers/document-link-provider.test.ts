@@ -32,9 +32,11 @@ End Namespace`;
       )) as LinkArr;
 
       assert.equal(links.length, 1);
-      assert.equal(links[0].range.start.line, 0);
-      assert.equal(links[0].range.start.character, "Imports ".length);
-      assert.ok(links[0].target);
+      const [link] = links;
+      assert.ok(link);
+      assert.equal(link.range.start.line, 0);
+      assert.equal(link.range.start.character, "Imports ".length);
+      assert.ok(link.target);
     });
 
     test("produces no link when the target namespace is unknown", async () => {

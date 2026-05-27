@@ -68,8 +68,10 @@ describe("D7BasicCodeActionProvider", () => {
       const actions = onlyQuickFixes(all);
 
       assert.equal(actions.length, 1);
-      assert.ok(actions[0].title.includes("Forms"));
-      expectEdit(actions[0].edit, { type: "insert", textIncludes: "Imports Forms" });
+      const [missingFix] = actions;
+      assert.ok(missingFix);
+      assert.ok(missingFix.title.includes("Forms"));
+      expectEdit(missingFix.edit, { type: "insert", textIncludes: "Imports Forms" });
     });
   });
 
@@ -97,8 +99,10 @@ describe("D7BasicCodeActionProvider", () => {
       const actions = onlyQuickFixes(all);
 
       assert.equal(actions.length, 1);
-      assert.ok(actions[0].title.includes("Forms"));
-      expectEdit(actions[0].edit, { type: "delete" });
+      const [unusedFix] = actions;
+      assert.ok(unusedFix);
+      assert.ok(unusedFix.title.includes("Forms"));
+      expectEdit(unusedFix.edit, { type: "delete" });
     });
 
     test("duplicate-import also emits a delete action", async () => {
@@ -120,7 +124,9 @@ describe("D7BasicCodeActionProvider", () => {
       const actions = onlyQuickFixes(all);
 
       assert.equal(actions.length, 1);
-      expectEdit(actions[0].edit, { type: "delete" });
+      const [dupFix] = actions;
+      assert.ok(dupFix);
+      expectEdit(dupFix.edit, { type: "delete" });
     });
   });
 
@@ -147,9 +153,11 @@ describe("D7BasicCodeActionProvider", () => {
       const actions = onlyQuickFixes(all);
 
       assert.equal(actions.length, 1);
-      assert.ok(actions[0].title.includes("mod_x"));
-      assert.equal(actions[0].command?.command, "data7.installModule");
-      assert.deepEqual(actions[0].command?.arguments?.[0], "mod_x");
+      const [declareFix] = actions;
+      assert.ok(declareFix);
+      assert.ok(declareFix.title.includes("mod_x"));
+      assert.equal(declareFix.command?.command, "data7.installModule");
+      assert.deepEqual(declareFix.command?.arguments?.[0], "mod_x");
     });
 
     test("module-not-found dispatches the data7.installModule command", async () => {
@@ -170,7 +178,9 @@ describe("D7BasicCodeActionProvider", () => {
       const actions = onlyQuickFixes(all);
 
       assert.equal(actions.length, 1);
-      assert.equal(actions[0].command?.command, "data7.installModule");
+      const [installFix] = actions;
+      assert.ok(installFix);
+      assert.equal(installFix.command?.command, "data7.installModule");
     });
   });
 
@@ -201,12 +211,15 @@ describe("D7BasicCodeActionProvider", () => {
       const actions = onlyQuickFixes(all);
 
       assert.equal(actions.length, 2);
-      assert.ok(actions[0].title.includes("Comentar"));
-      assert.equal(actions[0].isPreferred, true);
-      expectEdit(actions[0].edit, { type: "replace", textIncludes: "' " });
+      const [commentFix, suppressFix] = actions;
+      assert.ok(commentFix);
+      assert.ok(suppressFix);
+      assert.ok(commentFix.title.includes("Comentar"));
+      assert.equal(commentFix.isPreferred, true);
+      expectEdit(commentFix.edit, { type: "replace", textIncludes: "' " });
 
-      assert.ok(actions[1].title.includes("Suprimir"));
-      expectEdit(actions[1].edit, {
+      assert.ok(suppressFix.title.includes("Suprimir"));
+      expectEdit(suppressFix.edit, {
         type: "insert",
         textIncludes: "data7:disable-line unsupported-member",
       });
@@ -242,7 +255,9 @@ describe("D7BasicCodeActionProvider", () => {
         actions.map((a) => a.title),
         ['Você quis dizer "Align"?', 'Você quis dizer "Alignment"?', 'Você quis dizer "Alpha"?'],
       );
-      assert.equal(actions[0].isPreferred, true);
+      const [didYouMean] = actions;
+      assert.ok(didYouMean);
+      assert.equal(didYouMean.isPreferred, true);
       for (const action of actions) {
         expectEdit(action.edit, { type: "replace" });
       }

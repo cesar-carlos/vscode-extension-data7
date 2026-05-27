@@ -34,12 +34,43 @@ export class TypeResolver {
       `\\b(?:Dim|Private|Public|Protected|Shared)?\\s+${varName}\\b(?:\\s+As\\s+(?:New\\s+)?([a-zA-Z0-9_.]+))?`,
       "i",
     );
+    // `For Each <name> As <Type> In ...` introduces `<name>` into the enclosing
+    // scope. The sugar transpiler later expands it into a synthetic `Dim`, but
+    // hover/completion/signature must already see the variable while the file
+    // is still authored in sugared form.
+    const forEachRegex = new RegExp(
+      `\\bFor\\s+Each\\s+${varName}\\b(?:\\s+As\\s+([a-zA-Z0-9_.]+))?\\s+In\\b`,
+      "i",
+    );
+    // `Dim name = <expr>` (no As clause) — infer from the right-hand side
+    // when the RHS is a method call (`me.X()` / `obj.X()` / `New Type()`) or
+    // a `Cls.SharedX()` static call.
+    const assignmentRegex = new RegExp(
+      `\\b(?:Dim|Private|Public|Protected|Shared)?\\s+${varName}\\s*=\\s*(.+?)\\s*(?:'.*)?$`,
+      "i",
+    );
     for (let i = position.line; i >= 0; i--) {
-      const lineText = lines[i].trim();
+      const lineRaw = lines[i];
+      if (lineRaw === undefined) continue;
+      const lineText = lineRaw.trim();
       if (lineText.startsWith("'") || lineText.toLowerCase().startsWith("rem ")) continue;
+
+      const forEachMatch = lineText.match(forEachRegex);
+      if (forEachMatch) {
+        return forEachMatch[1] ?? "Variant";
+      }
+
       const match = lineText.match(regex);
       if (match) {
-        return match[1] || "Variant";
+        if (match[1]) return match[1];
+        // No `As Type` — try inferring from `= <expr>` on the same line.
+        const assignMatch = lineText.match(assignmentRegex);
+        const rhs = assignMatch?.[1];
+        if (rhs) {
+          const inferred = TypeResolver.inferExpressionType(rhs, document, i, indexer);
+          if (inferred) return inferred;
+        }
+        return "Variant";
       }
     }
 
@@ -130,18 +161,117 @@ export class TypeResolver {
       );
       if (exact) return exact;
 
-      // Array index access can be undefined at runtime (we don't enable
-      // `noUncheckedIndexedAccess`); cast to make that explicit.
-      const byName = lookupSystemClassByName(namePart)[0] as SymbolInfo | undefined;
+      // `noUncheckedIndexedAccess` now widens `[0]` to `T | undefined`
+      // automatically, so the explicit cast above is no longer needed.
+      const byName = lookupSystemClassByName(namePart)[0];
       if (byName) return byName;
 
       return indexer.findSymbolByName(namePart);
     }
 
-    const sys = lookupSystemClassByName(qualifiedOrSimpleName)[0] as SymbolInfo | undefined;
+    const sys = lookupSystemClassByName(qualifiedOrSimpleName)[0];
     if (sys) return sys;
 
     return indexer.findSymbolByName(qualifiedOrSimpleName);
+  }
+
+  /**
+   * Best-effort type inference for `Dim x = <expr>` when the user omits the
+   * `As <Type>` clause. Handles the cases that pay off the most in real
+   * Data7 code:
+   *
+   *  - `New <Type>(...)` → `<Type>`
+   *  - `Me.Method(...)` or `MyBase.Method(...)` → return type of `Method` on
+   *    the enclosing class
+   *  - `<ident>.Method(...)` → resolves `<ident>` to a type and looks up
+   *    `Method` on that type chain
+   *  - `<Class>.SharedMethod(...)` → return type of the shared/static method
+   *  - `<ident>` (bare identifier) → recurses into {@link getVariableType}
+   *
+   * Returns `undefined` when the expression's shape is unsupported (literals,
+   * string concatenation, arithmetic) — the caller should fall back to
+   * `"Variant"` in that case.
+   *
+   * `lineIdx` is the 0-based line where the declaration sits; recursive
+   * lookups walk backwards from that line so we never "see" the variable
+   * we are currently resolving.
+   */
+  public static inferExpressionType(
+    expr: string,
+    document: vscode.TextDocument,
+    lineIdx: number,
+    indexer: WorkspaceSymbolIndexer,
+  ): string | undefined {
+    const trimmed = expr.trim();
+
+    // `New <Type>(...)` — easiest case.
+    const newMatch = /^New\s+([\w.]+)\s*\(/i.exec(trimmed);
+    if (newMatch?.[1]) return newMatch[1];
+
+    // `<root>.<member>(...)` or `<root>.<member>` (no parens — property access).
+    const callMatch = /^([A-Za-z_]\w*)\.([A-Za-z_]\w*)\s*\(/.exec(trimmed);
+    if (callMatch) {
+      const root = callMatch[1];
+      const member = callMatch[2];
+      if (!root || !member) return undefined;
+      const containerType = TypeResolver.resolveRootType(root, document, lineIdx, indexer);
+      if (!containerType) return undefined;
+      const memberSymbol = TypeResolver.findMember(containerType, member, indexer);
+      if (memberSymbol?.type && memberSymbol.type !== "Void") {
+        return memberSymbol.type;
+      }
+      return undefined;
+    }
+
+    // Bare identifier — recurse via getVariableType (one hop earlier so we
+    // do not match the current declaration line again).
+    if (/^[A-Za-z_]\w*$/.test(trimmed)) {
+      // Construct a position type-erased — we only need `.line` inside the
+      // recursive call, and we know the prior declaration sits BEFORE lineIdx.
+      const position = { line: lineIdx, character: 0 } as vscode.Position;
+      return TypeResolver.getVariableType(trimmed, document, position, indexer);
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Resolves the type of the `<root>` token in expressions like `<root>.X`:
+   *
+   *  - `me` / `mybase` → the enclosing class declared in the file.
+   *  - `<ClassName>` (bare class identifier) → the class itself, so callers
+   *    can look up Shared members on it.
+   *  - Anything else → fall back to {@link getVariableType}.
+   */
+  private static resolveRootType(
+    root: string,
+    document: vscode.TextDocument,
+    lineIdx: number,
+    indexer: WorkspaceSymbolIndexer,
+  ): string | undefined {
+    const lower = root.toLowerCase();
+    if (lower === "me" || lower === "mybase") {
+      const fileSyms = indexer.getFileSymbols(document.uri.toString());
+      const currentClass = fileSyms?.symbols.find(
+        (s) => s.kind === "class" && lineIdx >= s.range.startLine && lineIdx <= s.range.endLine,
+      );
+      return currentClass?.name;
+    }
+
+    // Bare class/namespace name (static access).
+    const classSymbol = TypeResolver.findClassSymbol(root, indexer);
+    if (
+      classSymbol &&
+      (classSymbol.kind === "class" ||
+        classSymbol.kind === "structure" ||
+        classSymbol.kind === "namespace")
+    ) {
+      return classSymbol.name;
+    }
+
+    // Fallback: resolve as a variable.
+    const position = { line: lineIdx, character: 0 } as vscode.Position;
+    return TypeResolver.getVariableType(root, document, position, indexer);
   }
 
   /**
@@ -174,16 +304,40 @@ export class TypeResolver {
       members.push(...SYSTEM_SYMBOLS.filter((s) => containerMatch(s.containerName)));
       members.push(...indexer.getAllSymbols().filter((s) => containerMatch(s.containerName)));
 
-      if (classSymbol.inheritsFrom) {
-        collect(classSymbol.inheritsFrom);
-      }
+      const parent = TypeResolver.resolveParent(classSymbol);
+      if (parent) collect(parent);
     };
 
     const startClass = TypeResolver.findClassSymbol(className, indexer);
-    if (startClass?.inheritsFrom) {
-      collect(startClass.inheritsFrom);
-    }
+    if (!startClass) return members;
+    const parent = TypeResolver.resolveParent(startClass);
+    if (parent) collect(parent);
     return members;
+  }
+
+  /**
+   * Resolves the effective parent class name for the given symbol, applying
+   * the Data7 implicit "every workspace class inherits from TObject" rule.
+   *
+   * Returns `undefined` for `TObject` itself (root of the hierarchy) and for
+   * non-class symbols, so callers can stop walking the chain.
+   *
+   * System Library symbols are NOT auto-rooted at TObject: their own
+   * `inheritsFrom` is authoritative because primitives (`String`, `Integer`),
+   * enums (`TAlign`, `TBorderIcon`) and interfaces declared in
+   * `src/system-library/` deliberately omit `Inherits` and must NOT expose
+   * `TObject` members.
+   *
+   * **Public so every other inheritance walker in the codebase reuses the
+   * exact same rule** — keeping the implicit-TObject policy in a single
+   * place (diagnostics, code-actions, symbol-indexer all delegate here).
+   */
+  public static resolveParent(symbol: SymbolInfo): string | undefined {
+    if (symbol.kind !== "class") return symbol.inheritsFrom;
+    if (symbol.inheritsFrom) return symbol.inheritsFrom;
+    if (symbol.name.toLowerCase() === "tobject") return undefined;
+    if (symbol.fileUri.startsWith("system://")) return undefined;
+    return "TObject";
   }
 
   /**
@@ -241,17 +395,8 @@ export class TypeResolver {
       const classSymbol = TypeResolver.findClassSymbol(currentTypeName, indexer);
       if (!classSymbol) return undefined;
 
-      // Stop walking when we reach the implicit TObject root, otherwise we'd
-      // recurse forever on classes that inherit from themselves transitively
-      // through a stub declaration.
-      if (
-        (classSymbol.inheritsFrom ?? "").toLowerCase() === "tobject" &&
-        classSymbol.name.toLowerCase() === "tobject"
-      ) {
-        return undefined;
-      }
-
-      if (classSymbol.inheritsFrom) return search(classSymbol.inheritsFrom);
+      const parent = TypeResolver.resolveParent(classSymbol);
+      if (parent) return search(parent);
       return undefined;
     };
 
@@ -290,9 +435,8 @@ export class TypeResolver {
       members.push(...SYSTEM_SYMBOLS.filter((s) => containerMatch(s.containerName)));
       members.push(...indexer.getAllSymbols().filter((s) => containerMatch(s.containerName)));
 
-      if (classSymbol.inheritsFrom) {
-        collect(classSymbol.inheritsFrom);
-      }
+      const parent = TypeResolver.resolveParent(classSymbol);
+      if (parent) collect(parent);
     };
 
     collect(typeName);
