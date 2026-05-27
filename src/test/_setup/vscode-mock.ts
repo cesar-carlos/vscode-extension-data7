@@ -279,11 +279,23 @@ const mockVsCode = {
       toString: () => "file:///" + p.replace(/\\/g, "/"),
       fsPath: p,
     }),
+    /**
+     * Cross-platform mock of `vscode.Uri.parse(...).fsPath`:
+     *   - Windows: returns a backslash-separated path (e.g. `D:\foo\bar.bas`).
+     *   - POSIX:   returns a slash-separated path (e.g. `/home/x/bar.bas`).
+     * The previous implementation hardcoded `/` -> `\` substitution and broke
+     * every test on Linux CI runners.
+     */
     parse: (s: string) => {
       const decoded = decodeURIComponent(s);
+      const stripped = decoded.replace(/^file:\/+/, "");
+      const fsPath =
+        process.platform === "win32"
+          ? stripped.replace(/\//g, "\\")
+          : "/" + stripped.replace(/\\/g, "/");
       return {
         toString: () => s,
-        fsPath: decoded.replace(/^file:\/\/\//, "").replace(/\//g, "\\"),
+        fsPath,
       };
     },
   },
