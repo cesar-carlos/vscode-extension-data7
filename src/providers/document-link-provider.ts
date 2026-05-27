@@ -33,13 +33,14 @@ export class D7BasicDocumentLinkProvider implements vscode.DocumentLinkProvider 
     for (let i = 0; i < document.lineCount; i++) {
       const lineText = document.lineAt(i).text;
       const m = importsRegex.exec(lineText);
-      if (!m) continue;
+      const prefix = m?.[1];
+      const namespace = m?.[2];
+      if (!m || !prefix || !namespace) continue;
 
-      const namespace = m[2];
       const target = resolveNamespaceFile(this.indexer, namespace);
       if (!target) continue;
 
-      const startChar = m[1].length;
+      const startChar = prefix.length;
       const range = new vscode.Range(i, startChar, i, startChar + namespace.length);
       const link = new vscode.DocumentLink(range, vscode.Uri.file(target));
       link.tooltip = `Abrir definição do namespace ${namespace}`;

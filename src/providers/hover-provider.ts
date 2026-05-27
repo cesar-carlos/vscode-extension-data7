@@ -3,6 +3,7 @@ import type { SymbolInfo } from "../analysis/symbol-indexer";
 import { WorkspaceSymbolIndexer } from "../analysis/symbol-indexer";
 import { lookupSystemNamespaceOrClassByName, lookupSystemByName } from "../system-library";
 import { TypeResolver } from "../analysis/type-resolver";
+import { detectEnumerable } from "../analysis/enumerable-detector";
 import { formatParameterList } from "../utils/format-helpers";
 import { LANGUAGE_IDS } from "../infra/constants";
 
@@ -60,6 +61,13 @@ export class D7BasicHoverProvider implements vscode.HoverProvider {
     const lineText = document.lineAt(position.line).text;
     const textBeforeCursor = lineText.substring(0, range.start.character).trim();
 
+    // Special case: hovering on the `For` / `Each` / `In` / loop var of a
+    // `For Each` line. Surface the enumerable info the linter resolves so
+    // the user understands which Count/indexer the Builder will use, without
+    // needing to peek at docs/exemple/.
+    const forEachHover = this.tryForEachHover(document, position, range);
+    if (forEachHover) return forEachHover;
+
     let targetSymbol: SymbolInfo | undefined;
 
     // Case A: Hovering on a member of an object (e.g. `obj.Member`)
@@ -69,7 +77,7 @@ export class D7BasicHoverProvider implements vscode.HoverProvider {
         const prefix = lineText.substring(0, dotIndex).trim();
         const lastWordMatch = /([a-zA-Z0-9_]+)$/.exec(prefix);
 
-        if (lastWordMatch) {
+        if (lastWordMatch?.[1]) {
           const triggerWord = lastWordMatch[1];
           const triggerLower = triggerWord.toLowerCase();
 
@@ -188,5 +196,67 @@ export class D7BasicHoverProvider implements vscode.HoverProvider {
 
   private findClassMember(className: string, memberName: string): SymbolInfo | undefined {
     return TypeResolver.findMember(className, memberName, this.indexer);
+  }
+
+  /**
+   * When the hover sits anywhere on a `For Each <var>[ As <T>] In <ident>`
+   * header, returns a Hover that documents the resolved {@link EnumerableInfo}:
+   * the underlying type, the `Count` member used as the bound, the indexer
+   * called per iteration, and the inferred element type. The same machinery
+   * the linter uses to emit `not-enumerable` powers this hover, so the user
+   * sees exactly what the build pipeline would consume.
+   */
+  private tryForEachHover(
+    document: vscode.TextDocument,
+    position: vscode.Position,
+    range: vscode.Range,
+  ): vscode.Hover | undefined {
+    const lineText = document.lineAt(position.line).text;
+    const match = /^(\s*)For\s+Each\s+(\w+)(?:\s+As\s+([\w.]+))?\s+In\s+([A-Za-z_]\w*)\b/i.exec(
+      lineText,
+    );
+    if (!match) return undefined;
+    const operandName = match[4];
+    const explicitType: string | undefined = match[3];
+    if (!operandName) return undefined;
+
+    // Resolve operand type from the lines BEFORE the For Each (`getVariableType`
+    // would otherwise match the `In <operand>` on the very same line).
+    const operandType = TypeResolver.getVariableType(
+      operandName,
+      document,
+      new vscode.Position(Math.max(0, position.line - 1), 0),
+      this.indexer,
+    );
+    if (!operandType) return undefined;
+
+    const enumerable = detectEnumerable(
+      operandType,
+      (t) => TypeResolver.getAllMembersForType(t, this.indexer),
+      explicitType,
+    );
+
+    const md = new vscode.MarkdownString();
+    md.appendCodeblock(lineText.trim(), LANGUAGE_IDS.d7basic);
+    md.appendMarkdown("\n---\n");
+    if (enumerable) {
+      md.appendMarkdown(
+        `**Iterando \`${operandType}\`** via \`${operandName}.${enumerable.indexerMember}(i): ${enumerable.elementType}\``,
+      );
+      const declaredType = explicitType ?? enumerable.elementType;
+      md.appendMarkdown(
+        `\n\nO Builder vai expandir esta linha em \`For i = 0 To ${operandName}.${enumerable.countMember} - 1\` ` +
+          `e injetar um \`Dim ${match[2]} As ${declaredType} = ${operandName}.${enumerable.indexerMember}(i)\` ` +
+          `(forma nativa equivalente).`,
+      );
+    } else {
+      md.appendMarkdown(
+        `⚠️ **\`${operandType}\` não é enumerável** — falta a propriedade \`Count As Integer\` ou um acessor indexado.`,
+      );
+      md.appendMarkdown(
+        "\n\nO Builder vai deixar esta linha intacta no `.7Proj` e o executor falhará em runtime.",
+      );
+    }
+    return new vscode.Hover(md, range);
   }
 }

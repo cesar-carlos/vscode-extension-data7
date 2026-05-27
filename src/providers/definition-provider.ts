@@ -28,7 +28,7 @@ export class D7BasicDefinitionProvider implements vscode.DefinitionProvider {
         const prefix = lineText.substring(0, dotIndex).trim();
         const lastWordMatch = /([a-zA-Z0-9_]+)$/.exec(prefix);
 
-        if (lastWordMatch) {
+        if (lastWordMatch?.[1]) {
           const triggerWord = lastWordMatch[1];
           const triggerLower = triggerWord.toLowerCase();
 

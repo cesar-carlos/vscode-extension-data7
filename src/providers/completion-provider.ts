@@ -74,10 +74,8 @@ function matchImportsPrefix(textBeforeCursor: string): string | undefined {
   // Allow optional leading whitespace + `Imports` + at least one space, then
   // an optional partial namespace identifier (letters/digits/dots/underscore).
   const m = /^\s*Imports\s+([A-Za-z_][\w.]*)?$/i.exec(textBeforeCursor);
-  // The capturing group is optional. Without `noUncheckedIndexedAccess`,
-  // TypeScript narrows `m[1]` to `string`, but at runtime it can be
-  // `undefined` when the user types `Imports ` with no namespace yet.
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+  // The capturing group is optional — `m[1]` is `string | undefined` under
+  // `noUncheckedIndexedAccess`; `?? ""` covers the `Imports ` (no namespace yet) case.
   return m ? (m[1] ?? "") : undefined;
 }
 
@@ -131,7 +129,7 @@ export class D7BasicCompletionProvider implements vscode.CompletionItemProvider 
       const prefix = textBeforeCursor.substring(0, dotIndex).trim();
       const lastWordMatch = /([a-zA-Z0-9_]+)$/.exec(prefix);
 
-      if (lastWordMatch) {
+      if (lastWordMatch?.[1]) {
         const triggerWord = lastWordMatch[1];
         const triggerLower = triggerWord.toLowerCase();
 
@@ -351,6 +349,48 @@ export class D7BasicCompletionProvider implements vscode.CompletionItemProvider 
     );
     forSnippet.documentation = "Loop For Incremental";
     items.push(forSnippet);
+
+    const forEachSnippet = new vscode.CompletionItem(
+      "For Each...Next",
+      vscode.CompletionItemKind.Snippet,
+    );
+    forEachSnippet.insertText = new vscode.SnippetString(
+      "For Each ${1:item} As ${2:Tipo} In ${3:colecao}\n\t$0\nNext",
+    );
+    forEachSnippet.documentation =
+      "Loop de enumeração (açúcar — transpilado para For clássico no build).";
+    items.push(forEachSnippet);
+
+    const forEachRangeSnippet = new vscode.CompletionItem(
+      "For Each In range",
+      vscode.CompletionItemKind.Snippet,
+    );
+    forEachRangeSnippet.insertText = new vscode.SnippetString(
+      "For Each ${1:i} In ${2:0}..${3:n}\n\t$0\nNext",
+    );
+    forEachRangeSnippet.documentation =
+      "Loop sobre intervalo numérico (açúcar — transpilado para `For i = a To b` no build).";
+    items.push(forEachRangeSnippet);
+
+    const interpolationSnippet = new vscode.CompletionItem(
+      'String Interpolation $"..."',
+      vscode.CompletionItemKind.Snippet,
+    );
+    interpolationSnippet.insertText = new vscode.SnippetString('$"${1:texto} {${2:expr}}$0"');
+    interpolationSnippet.documentation =
+      'String interpolada (açúcar — transpilada para `"texto " & (expr)` com `&` no build).';
+    items.push(interpolationSnippet);
+
+    const ternarySnippet = new vscode.CompletionItem(
+      "Dim ternary x = cond ? a : b",
+      vscode.CompletionItemKind.Snippet,
+    );
+    ternarySnippet.insertText = new vscode.SnippetString(
+      "Dim ${1:nome} As ${2:Tipo} = ${3:cond} ? ${4:valorTrue} : ${5:valorFalse}",
+    );
+    ternarySnippet.documentation =
+      "Atribuição ternária (açúcar — transpilada para `If/Then/Else/End If` no build).";
+    items.push(ternarySnippet);
 
     const trySnippet = new vscode.CompletionItem("Try...Catch", vscode.CompletionItemKind.Snippet);
     trySnippet.insertText = new vscode.SnippetString(

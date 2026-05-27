@@ -29,8 +29,20 @@ export function registerCommands(context: vscode.ExtensionContext): void {
     [COMMAND_IDS.runProject, () => BuildService.run()],
     [COMMAND_IDS.installModule, () => DependencyService.installModule()],
     [COMMAND_IDS.updateDependencies, () => DependencyService.updateDependencies()],
-    [COMMAND_IDS.importModuleToRepository, () => RepositoryService.importModuleToRepository()],
-    [COMMAND_IDS.bulkImportToRepository, () => RepositoryService.bulkImportToRepository()],
+    [
+      COMMAND_IDS.importModuleToRepository,
+      async () => {
+        await RepositoryService.importModuleToRepository();
+        await DependencyService.refreshActiveProject();
+      },
+    ],
+    [
+      COMMAND_IDS.bulkImportToRepository,
+      async () => {
+        await RepositoryService.bulkImportToRepository();
+        await DependencyService.refreshActiveProject();
+      },
+    ],
     [COMMAND_IDS.exploreRepository, () => RepositoryService.exploreRepository()],
     [COMMAND_IDS.openParentFolder, () => ActivationService.openParentFolder()],
     [COMMAND_IDS.generateSystemLibraryDocs, () => DocsService.generateDocs()],

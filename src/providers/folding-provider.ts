@@ -82,7 +82,9 @@ export class D7BasicFoldingRangeProvider implements vscode.FoldingRangeProvider 
     };
 
     for (let i = 0; i < cleaned.length; i++) {
-      const line = cleaned[i];
+      // `i < cleaned.length` guarantees the access; the `?? ""` fallback
+      // keeps `noUncheckedIndexedAccess` happy with no runtime change.
+      const line = cleaned[i] ?? "";
 
       // Imports run.
       if (RE_IMPORTS.test(line)) {

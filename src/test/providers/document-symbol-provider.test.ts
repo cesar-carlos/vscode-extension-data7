@@ -32,10 +32,12 @@ End Namespace`;
 
       assert.ok(Array.isArray(symbols));
       assert.equal(symbols.length, 1, "top-level must be the namespace");
-      assert.equal(symbols[0].name, "mod_a");
-      assert.equal(symbols[0].kind, vscode.SymbolKind.Namespace);
+      const [ns] = symbols;
+      assert.ok(ns);
+      assert.equal(ns.name, "mod_a");
+      assert.equal(ns.kind, vscode.SymbolKind.Namespace);
 
-      const greeter = symbols[0].children.find((c) => c.name === "Greeter");
+      const greeter = ns.children.find((c) => c.name === "Greeter");
       assert.ok(greeter, "Greeter must be a child of the namespace");
       assert.equal(greeter.kind, vscode.SymbolKind.Class);
 

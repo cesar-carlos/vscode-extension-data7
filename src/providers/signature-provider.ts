@@ -43,12 +43,12 @@ export class D7BasicSignatureHelpProvider implements vscode.SignatureHelpProvide
 
     // Extract the function name word preceding the '('
     let scanIdx = wordEndIdx - 1;
-    while (scanIdx >= 0 && /\s/.test(lineText[scanIdx])) {
+    while (scanIdx >= 0 && /\s/.test(lineText[scanIdx] ?? "")) {
       scanIdx--;
     }
 
     const idMatch = /([a-zA-Z0-9_]+)$/.exec(lineText.substring(0, scanIdx + 1));
-    if (!idMatch) return undefined;
+    if (!idMatch?.[1]) return undefined;
 
     const funcName = idMatch[1];
     let dotPrefix: string | undefined;
