@@ -55,6 +55,8 @@ export const COMMAND_IDS = {
   showOutput: "data7.showOutput",
   installMcpServer: "data7.installMcpServer",
   previewMcpClientConfig: "data7.previewMcpClientConfig",
+  previewTranspiledCode: "data7.previewTranspiledCode",
+  previewTranspiledCodeActive: "data7.previewTranspiledCodeActive",
 } as const;
 
 export type CommandId = (typeof COMMAND_IDS)[keyof typeof COMMAND_IDS];

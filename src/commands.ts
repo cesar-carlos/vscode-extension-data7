@@ -10,6 +10,7 @@ import { DocsService } from "./services/docs-service";
 import { MCPService } from "./services/mcp-service";
 import { ProjectService } from "./services/project-service";
 import { RepositoryService } from "./services/repository-service";
+import { PreviewService } from "./services/preview-service";
 
 /**
  * Registers every `data7.*` command contributed by the extension. Each entry
@@ -23,7 +24,7 @@ import { RepositoryService } from "./services/repository-service";
 export function registerCommands(context: vscode.ExtensionContext): void {
   const commands: [string, (...args: never[]) => unknown][] = [
     [COMMAND_IDS.openProject, (uri: vscode.Uri) => ProjectService.openProject(uri)],
-    [COMMAND_IDS.decompose, (uri: vscode.Uri) => ProjectService.openProject(uri)],
+    [COMMAND_IDS.decompose, (uri: vscode.Uri) => ProjectService.decomposeActiveProject(uri)],
     [COMMAND_IDS.newProject, () => ProjectService.createNewProject()],
     [COMMAND_IDS.openDevStudio, () => BuildService.openInDevStudio()],
     [COMMAND_IDS.build, () => BuildService.build()],
@@ -56,6 +57,8 @@ export function registerCommands(context: vscode.ExtensionContext): void {
         logger.show();
       },
     ],
+    [COMMAND_IDS.previewTranspiledCode, () => PreviewService.showPreview(true)],
+    [COMMAND_IDS.previewTranspiledCodeActive, () => PreviewService.showPreview(false)],
   ];
 
   for (const [id, handler] of commands) {
